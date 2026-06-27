@@ -1,0 +1,26 @@
+{
+  "_verified": false,
+  "_note": "VERIFY against רשות המסים + ביטוח לאומי before real filing. Brackets/credit-point/bituach are best-effort 2026 estimates.",
+  "year": 2026,
+  "patur_ceiling": "122833",
+  "credit_point_value": "2976",
+  "income_tax_brackets": [
+    {"upper": "84120",  "rate": "0.10"},
+    {"upper": "120720", "rate": "0.14"},
+    {"upper": "193800", "rate": "0.20"},
+    {"upper": "269280", "rate": "0.31"},
+    {"upper": "560280", "rate": "0.35"},
+    {"upper": "721560", "rate": "0.47"},
+    {"upper": null,     "rate": "0.50"}
+  ],
+  "pension_eligible_income_cap": "232800",
+  "pension_deduction_pct": "0.11",
+  "pension_credit_pct": "0.05",
+  "pension_credit_rate": "0.35",
+  "pension_total_cap_pct": "0.165",
+  "bituach_brackets": [
+    {"upper": "99137", "rate": "0.0597"},
+    {"upper": null,    "rate": "0.1783"}
+  ],
+  "bituach_income_ceiling": "594828"
+}

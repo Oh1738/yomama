@@ -1,0 +1,5 @@
+[
+  {"pattern": "שרת",  "category": "תשתית",        "deductible": true,  "business_pct": 100},
+  {"pattern": "דומיין","category": "תשתית",        "deductible": true,  "business_pct": 100},
+  {"pattern": "קורס", "category": "השתלמות מקצועית","deductible": true,  "business_pct": 100}
+]
