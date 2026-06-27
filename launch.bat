@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 
 echo Installing dependencies...
-pip install typer rich flask --quiet
+pip install typer rich flask anthropic --quiet
 
 echo Starting server...
 start "" python web_ui.py

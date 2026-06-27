@@ -1,7 +1,9 @@
 from __future__ import annotations
+import base64
 import io
+import json
 import os
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from flask import Flask, render_template_string, request, redirect, url_for, flash
@@ -12,11 +14,23 @@ from patur.categorize import load_rules, categorize
 from patur.rates import load_rates
 from patur.reports import build_report
 from patur.advances import recommend_advance
+from patur.models import Transaction, Direction
 
 app = Flask(__name__)
 app.secret_key = "patur-local-ui"
 
 DB_PATH = "patur.db"
+CONFIG_PATH = "patur_config.json"
+
+def _load_config():
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "r") as f:
+            return json.load(f)
+    return {}
+
+def _save_config(cfg):
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f)
 
 HTML = """
 <!DOCTYPE html>
@@ -25,15 +39,17 @@ HTML = """
 <meta charset="utf-8">
 <title>עוסק פטור — לוח בקרה</title>
 <style>
-  body { font-family: Arial, sans-serif; max-width: 860px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; color: #222; }
+  body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; color: #222; }
   h1 { color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 8px; }
   h2 { color: #1a5276; margin-top: 32px; }
   .card { background: white; border-radius: 8px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
   label { display: block; margin-bottom: 4px; font-weight: bold; font-size: 0.9em; }
-  input[type=text], input[type=number], input[type=file] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 12px; }
+  input[type=text], input[type=number], input[type=file], input[type=password] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 12px; }
   button { background: #1a5276; color: white; border: none; padding: 10px 24px; border-radius: 4px; cursor: pointer; font-size: 1em; }
   button:hover { background: #154360; }
+  .btn-ai { background: #7d3c98; }
+  .btn-ai:hover { background: #6c3483; }
   .stat { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; font-size: 1.05em; }
   .stat:last-child { border-bottom: none; }
   .stat .val { font-weight: bold; }
@@ -41,6 +57,9 @@ HTML = """
   .warn  { background: #fef9e7; border: 1px solid #f39c12; border-radius: 4px; padding: 10px 16px; margin-top: 12px; color: #7d6608; }
   .ok    { background: #eafaf1; border: 1px solid #27ae60; border-radius: 4px; padding: 10px 16px; margin-top: 12px; color: #1e8449; }
   .flash-msg { padding: 10px 16px; border-radius: 4px; margin-bottom: 16px; background: #d6eaf8; border: 1px solid #2e86c1; color: #1a5276; }
+  .ai-badge { display: inline-block; background: #7d3c98; color: white; font-size: 0.75em; padding: 2px 8px; border-radius: 10px; margin-right: 6px; vertical-align: middle; }
+  .parsed-preview { background: #f9f0ff; border: 1px solid #c39bd3; border-radius: 4px; padding: 12px; margin-top: 12px; font-size: 0.9em; }
+  .key-hint { font-size: 0.8em; color: #888; margin-top: -8px; margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -82,6 +101,40 @@ HTML = """
     </form>
   </div>
 
+</div>
+
+<!-- AI Vision Section -->
+<div class="card">
+  <h2><span class="ai-badge">AI</span> סריקת מסמכים חכמה</h2>
+  <p style="color:#555; margin-top:0">העלה תמונת קבלה, חשבונית, PDF או אימייל — הבינה המלאכותית תחלץ את הנתונים ותוסיף אותם אוטומטית.</p>
+
+  <!-- API Key settings -->
+  <form method="post" action="/save-api-key" style="margin-bottom:20px">
+    <label>מפתח API של Anthropic</label>
+    <input type="password" name="api_key" placeholder="sk-ant-..." value="{{ api_key_set and '••••••••' or '' }}">
+    <div class="key-hint">המפתח נשמר באופן מקומי בקובץ patur_config.json בלבד. <a href="https://console.anthropic.com/settings/keys" target="_blank">קבל מפתח</a></div>
+    <button type="submit">שמור מפתח</button>
+  </form>
+
+  <!-- Document upload -->
+  <form method="post" action="/parse-document" enctype="multipart/form-data">
+    <label>העלה מסמך (תמונה / PDF / טקסט)</label>
+    <input type="file" name="file" accept="image/*,.pdf,.txt,.eml" required {{ not api_key_set and 'disabled' or '' }}>
+    {% if not api_key_set %}
+    <div class="warn">⚠️ הגדר מפתח API לפני שימוש בסריקה חכמה</div>
+    {% endif %}
+    <br>
+    <button type="submit" class="btn-ai" {{ not api_key_set and 'disabled' or '' }}>🤖 סרוק וייבא ▶</button>
+  </form>
+
+  {% if parsed_result %}
+  <div class="parsed-preview">
+    <strong>תוצאת סריקה:</strong><br>
+    {% for item in parsed_result %}
+    ✓ {{ item.date }} | {{ item.description }} | {{ item.direction }} | ₪{{ item.amount }}<br>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 
 {% if result %}
@@ -126,7 +179,139 @@ def _get_conn():
 
 @app.route("/")
 def index():
-    return render_template_string(HTML, result=None)
+    cfg = _load_config()
+    return render_template_string(HTML, result=None, parsed_result=None,
+                                  api_key_set=bool(cfg.get("anthropic_api_key")))
+
+@app.route("/save-api-key", methods=["POST"])
+def save_api_key():
+    key = request.form.get("api_key", "").strip()
+    if key and not key.startswith("•"):
+        cfg = _load_config()
+        cfg["anthropic_api_key"] = key
+        _save_config(cfg)
+        flash("מפתח API נשמר בהצלחה ✓")
+    return redirect(url_for("index"))
+
+@app.route("/parse-document", methods=["POST"])
+def parse_document():
+    cfg = _load_config()
+    api_key = cfg.get("anthropic_api_key")
+    if not api_key:
+        flash("לא הוגדר מפתח API")
+        return redirect(url_for("index"))
+
+    f = request.files.get("file")
+    if not f:
+        flash("לא נבחר קובץ")
+        return redirect(url_for("index"))
+
+    filename = f.filename.lower()
+    raw = f.read()
+
+    try:
+        import anthropic
+    except ImportError:
+        flash("חסר חבילת anthropic — הרץ: pip install anthropic")
+        return redirect(url_for("index"))
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    PROMPT = """You are an Israeli bookkeeping assistant. Extract ALL financial transactions from this document.
+For each transaction return a JSON array where each item has:
+- "date": "DD/MM/YYYY"
+- "description": short Hebrew or English description
+- "amount": numeric string (positive number only)
+- "direction": "IN" for income/credit, "OUT" for expense/debit
+
+Return ONLY valid JSON array, no explanation. Example:
+[{"date":"15/06/2026","description":"תשלום לקוח","amount":"1500","direction":"IN"}]
+
+If no transactions found, return [].
+"""
+
+    # Build message content based on file type
+    content: list = []
+
+    if filename.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+        media_type = "image/jpeg" if filename.endswith((".jpg", ".jpeg")) else \
+                     "image/png" if filename.endswith(".png") else \
+                     "image/gif" if filename.endswith(".gif") else "image/webp"
+        b64 = base64.standard_b64encode(raw).decode()
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+            {"type": "text", "text": PROMPT},
+        ]
+    elif filename.endswith(".pdf"):
+        b64 = base64.standard_b64encode(raw).decode()
+        content = [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
+            {"type": "text", "text": PROMPT},
+        ]
+    else:
+        # plain text / email
+        text_content = raw.decode("utf-8", errors="replace")
+        content = [{"type": "text", "text": f"{PROMPT}\n\nDocument content:\n{text_content}"}]
+
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": content}],
+            betas=["pdfs-2024-09-25"] if filename.endswith(".pdf") else [],
+        )
+        raw_json = response.content[0].text.strip()
+        # strip markdown code fences if present
+        if raw_json.startswith("```"):
+            raw_json = raw_json.split("```")[1]
+            if raw_json.startswith("json"):
+                raw_json = raw_json[4:]
+        items = json.loads(raw_json)
+    except Exception as e:
+        flash(f"שגיאה בסריקה: {e}")
+        return redirect(url_for("index"))
+
+    if not items:
+        flash("לא נמצאו תנועות במסמך")
+        return redirect(url_for("index"))
+
+    conn = _get_conn()
+    rules = load_rules()
+    txs = []
+    ext_prefix = os.path.splitext(filename)[0][:20]
+    for i, item in enumerate(items):
+        try:
+            d = datetime.strptime(item["date"].strip(), "%d/%m/%Y").date()
+            amt = Decimal(str(item["amount"]).replace(",", ""))
+            direction = Direction.IN if item["direction"] == "IN" else Direction.OUT
+            tx = Transaction(
+                date=d,
+                direction=direction,
+                amount=amt,
+                description=item.get("description", "").strip(),
+                source="ai_vision",
+                external_id=f"ai:{ext_prefix}:{i}",
+                category="הכנסה" if direction == Direction.IN else "הוצאה",
+            )
+            txs.append(categorize(tx, rules))
+        except Exception:
+            continue
+
+    n = dbmod.insert_transactions(conn, txs)
+
+    parsed_display = [
+        {"date": t.date.strftime("%d/%m/%Y"),
+         "description": t.description,
+         "direction": "הכנסה" if t.direction == Direction.IN else "הוצאה",
+         "amount": str(t.amount)}
+        for t in txs
+    ]
+
+    flash(f"סריקה הצליחה — נוספו {n} תנועות חדשות מהמסמך 🤖")
+    cfg2 = _load_config()
+    return render_template_string(HTML, result=None,
+                                  parsed_result=parsed_display,
+                                  api_key_set=bool(cfg2.get("anthropic_api_key")))
 
 @app.route("/import-green-invoice", methods=["POST"])
 def import_green_invoice():
@@ -191,7 +376,9 @@ def status():
         "pension_warnings": rep.liability.pension.warnings,
         "advance": advance,
     }
-    return render_template_string(HTML, result=result)
+    cfg = _load_config()
+    return render_template_string(HTML, result=result, parsed_result=None,
+                                  api_key_set=bool(cfg.get("anthropic_api_key")))
 
 if __name__ == "__main__":
     app.run(debug=False, port=5050)
